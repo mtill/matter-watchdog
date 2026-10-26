@@ -1,0 +1,74 @@
+# matter-watchdog
+
+This listener connects to the Matter websocket server and watches the configured
+sensor nodes. When a node reports an open state, it starts a timer. If the
+sensor remains open for the configured duration, the listener sends a message
+to the configured ntfy topic. A closed-state update cancels the timer.
+
+## Configuration
+
+Edit `config.json` alongside `matter-watchdog.py`:
+
+```json
+{
+  "websocket_url": "ws://127.0.0.1:5580/ws",
+  "target_nodes": [4, 9],
+  "alert_timeout_seconds": 45,
+  "ntfy": {
+    "url": "https://ntfy.example.com/my-topic",
+    "username": "your-ntfy-user",
+    "password": "your-ntfy-password"
+  }
+}
+```
+
+The listener handles boolean state updates for the configured node IDs. It
+assumes `true` means open and `false` means closed. Verify this mapping against
+the events from your Matter server before relying on alerts.
+
+The config contains ntfy credentials in plaintext. Restrict access to it and
+do not commit or share it:
+
+```bash
+chmod 600 config.json
+```
+
+## Run manually
+
+The listener requires Python 3 and the `websockets` package:
+
+```bash
+python3 -m pip install websockets
+python3 matter-watchdog.py
+```
+
+## Run as a user systemd service
+
+The repository includes `matter-watchdog.service`, configured for this
+checkout at `/home/beck/smarthome`. Install and enable it for the current user:
+
+```bash
+mkdir -p ~/.config/systemd/user
+ln -s /home/beck/smarthome/matter-watchdog.service \
+  ~/.config/systemd/user/matter-watchdog.service
+systemctl --user daemon-reload
+systemctl --user enable --now matter-watchdog.service
+```
+
+The service restarts after exit or failure, with a five-second delay. Useful
+commands:
+
+```bash
+systemctl --user status matter-watchdog.service
+systemctl --user restart matter-watchdog.service
+systemctl --user stop matter-watchdog.service
+journalctl --user -u matter-watchdog.service -f
+```
+
+For the user service to continue running after logout and start at boot without
+a user login, enable lingering for the account (administrator privileges may
+be required):
+
+```bash
+sudo loginctl enable-linger "$USER"
+```

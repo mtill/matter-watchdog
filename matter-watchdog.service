@@ -1,0 +1,14 @@
+[Unit]
+Description=matter-watchdog
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/matter-watchdog
+ExecStart=/usr/bin/python3 %h/matter-watchdog/matter-watchdog.py
+Restart=always
+RestartSec=30
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
