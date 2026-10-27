@@ -86,7 +86,7 @@ active_timers: dict[int, asyncio.Task[None]] = {}
 START_LISTENING_MESSAGE = json.dumps(
     {"message_id": "1", "command": "start_listening"}
 )
-TCP_REPEAT_INTERVAL_SECONDS = 120
+TCP_REPEAT_INTERVAL_SECONDS = 60
 
 
 def get_sensor_frame(data: dict) -> tuple[object, object]:
