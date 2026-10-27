@@ -3,11 +3,10 @@
 
 
 import asyncio
-import base64
 import json
 import logging
 from pathlib import Path
-import urllib.request
+import socket
 import websockets
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
@@ -32,10 +31,11 @@ def load_config() -> dict:
     websocket_url = config["websocket_url"]
     target_nodes = config["target_nodes"]
     alert_timeout = config["alert_timeout_seconds"]
-    ntfy = config["ntfy"]
-    ntfy_url = ntfy["url"]
-    ntfy_username = ntfy["username"]
-    ntfy_password = ntfy["password"]
+    tcp = config["tcp"]
+    tcp_host = tcp["host"]
+    tcp_port = tcp["port"]
+    tcp_payload = tcp["payload"]
+    max_tcp_sends = tcp["max_tcp_sends"]
   except (KeyError, TypeError) as e:
     raise RuntimeError(f"Missing or invalid configuration setting: {e}") from e
 
@@ -53,20 +53,31 @@ def load_config() -> dict:
       or alert_timeout <= 0
   ):
     raise RuntimeError("'alert_timeout_seconds' must be a positive number.")
-  if not isinstance(ntfy_url, str) or not ntfy_url:
-    raise RuntimeError("'ntfy.url' must be a non-empty string.")
-  if not isinstance(ntfy_username, str) or not ntfy_username:
-    raise RuntimeError("'ntfy.username' must be a non-empty string.")
-  if not isinstance(ntfy_password, str) or not ntfy_password:
-    raise RuntimeError("'ntfy.password' must be a non-empty string.")
+  if not isinstance(tcp_host, str) or not tcp_host:
+    raise RuntimeError("'tcp.host' must be a non-empty string.")
+  if (
+      not isinstance(tcp_port, int)
+      or isinstance(tcp_port, bool)
+      or not 1 <= tcp_port <= 65535
+  ):
+    raise RuntimeError("'tcp.port' must be an integer from 1 to 65535.")
+  if not isinstance(tcp_payload, int) or isinstance(tcp_payload, bool):
+    raise RuntimeError("'tcp.payload' must be an integer.")
+  if (
+      not isinstance(max_tcp_sends, int)
+      or isinstance(max_tcp_sends, bool)
+      or max_tcp_sends <= 0
+  ):
+    raise RuntimeError("'tcp.max_tcp_sends' must be a positive integer.")
 
   return {
       "websocket_url": websocket_url,
       "target_nodes": frozenset(target_nodes),
       "alert_timeout_seconds": alert_timeout,
-      "ntfy_url": ntfy_url,
-      "ntfy_username": ntfy_username,
-      "ntfy_password": ntfy_password,
+      "tcp_host": tcp_host,
+      "tcp_port": tcp_port,
+      "tcp_payload": tcp_payload,
+      "max_tcp_sends": max_tcp_sends,
   }
 
 
@@ -75,6 +86,7 @@ active_timers: dict[int, asyncio.Task[None]] = {}
 START_LISTENING_MESSAGE = json.dumps(
     {"message_id": "1", "command": "start_listening"}
 )
+TCP_REPEAT_INTERVAL_SECONDS = 120
 
 
 def get_sensor_frame(data: dict) -> tuple[object, object]:
@@ -96,25 +108,14 @@ def get_sensor_frame(data: dict) -> tuple[object, object]:
   return node_id, state
 
 
-def send_ntfy_message(node_id: int) -> None:
-  credentials = base64.b64encode(
-      f"{CONFIG['ntfy_username']}:{CONFIG['ntfy_password']}".encode("utf-8")
-  ).decode("ascii")
-  request = urllib.request.Request(
-      CONFIG["ntfy_url"],
-      data=f"sensor (Node {node_id}) has been OPEN for "
-           f"{CONFIG['alert_timeout_seconds']:g} seconds.".encode("utf-8"),
-      headers={
-          "Authorization": f"Basic {credentials}",
-          "Title": "Sensor left open",
-          "Content-Type": "text/plain; charset=utf-8",
-      },
-      method="POST",
-  )
-
-  with urllib.request.urlopen(request, timeout=15) as response:
-    if not 200 <= response.status < 300:
-      raise RuntimeError(f"ntfy returned HTTP {response.status}")
+def send_tcp_payload() -> None:
+  try:
+    with socket.create_connection(
+        (CONFIG["tcp_host"], CONFIG["tcp_port"]), timeout=15
+    ) as connection:
+      connection.sendall(str(CONFIG["tcp_payload"]).encode("ascii"))
+  except OSError as e:
+    raise RuntimeError(f"TCP request failed: {e}") from e
 
 
 async def trigger_alert(node_id: int) -> None:
@@ -124,10 +125,24 @@ async def trigger_alert(node_id: int) -> None:
         f"🚨 ALERT: sensor (Node {node_id}) has been OPEN for"
         f" {CONFIG['alert_timeout_seconds']:g} seconds!"
     )
-    await asyncio.to_thread(send_ntfy_message, node_id)
-    logger.info(f"ntfy alert sent for Node {node_id}.")
+    max_tcp_sends = CONFIG["max_tcp_sends"]
+    for attempt in range(1, max_tcp_sends + 1):
+      try:
+        await asyncio.to_thread(send_tcp_payload)
+        logger.info(
+            f"TCP payload sent for Node {node_id} "
+            f"(attempt {attempt}/{max_tcp_sends})."
+        )
+      except RuntimeError as e:
+        logger.error(
+            f"Failed to send TCP payload for Node {node_id} "
+            f"(attempt {attempt}/{max_tcp_sends}): {e}"
+        )
+
+      if attempt < max_tcp_sends:
+        await asyncio.sleep(TCP_REPEAT_INTERVAL_SECONDS)
   except (OSError, RuntimeError) as e:
-    logger.error(f"Failed to send ntfy alert for Node {node_id}: {e}")
+    logger.error(f"Failed to send alert for Node {node_id}: {e}")
   except asyncio.CancelledError:
     logger.info(f"✅ Timer cancelled for Node {node_id} (Sensor closed).")
 

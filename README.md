@@ -2,8 +2,10 @@
 
 This listener connects to the Matter websocket server and watches the configured
 sensor nodes. When a node reports an open state, it starts a timer. If the
-sensor remains open for the configured duration, the listener sends a message
-to the configured ntfy topic. A closed-state update cancels the timer.
+sensor remains open for the configured duration, the listener sends the
+configured TCP payload to the configured host and port. The TCP payload is sent
+immediately and then every two minutes, up to the configured maximum number of
+sends. A closed-state update cancels any remaining sends.
 
 ## Configuration
 
@@ -14,24 +16,18 @@ Edit `config.json` alongside `matter-watchdog.py`:
   "websocket_url": "ws://127.0.0.1:5580/ws",
   "target_nodes": [4, 9],
   "alert_timeout_seconds": 45,
-  "ntfy": {
-    "url": "https://ntfy.example.com/my-topic",
-    "username": "your-ntfy-user",
-    "password": "your-ntfy-password"
+  "tcp": {
+    "host": "10.139.139.74",
+    "port": 65432,
+    "payload": 10,
+    "max_tcp_sends": 10
   }
 }
 ```
 
 The listener handles boolean state updates for the configured node IDs. It
-assumes `true` means open and `false` means closed. Verify this mapping against
+assumes `false` means open and `true` means closed. Verify this mapping against
 the events from your Matter server before relying on alerts.
-
-The config contains ntfy credentials in plaintext. Restrict access to it and
-do not commit or share it:
-
-```bash
-chmod 600 config.json
-```
 
 ## Run manually
 
