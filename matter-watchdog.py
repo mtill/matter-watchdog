@@ -24,60 +24,16 @@ def load_config() -> dict:
   except (OSError, json.JSONDecodeError) as e:
     raise RuntimeError(f"Unable to load configuration from {CONFIG_PATH}: {e}") from e
 
-  if not isinstance(config, dict):
-    raise RuntimeError(f"Configuration in {CONFIG_PATH} must be a JSON object.")
-
-  try:
-    websocket_url = config["websocket_url"]
-    target_nodes = config["target_nodes"]
-    alert_timeout = config["alert_timeout_seconds"]
-    tcp = config["tcp"]
-    tcp_host = tcp["host"]
-    tcp_port = tcp["port"]
-    tcp_payload = tcp["payload"]
-    max_tcp_sends = tcp["max_tcp_sends"]
-  except (KeyError, TypeError) as e:
-    raise RuntimeError(f"Missing or invalid configuration setting: {e}") from e
-
-  if not isinstance(websocket_url, str) or not websocket_url:
-    raise RuntimeError("'websocket_url' must be a non-empty string.")
-  if (
-      not isinstance(target_nodes, list)
-      or not target_nodes
-      or any(not isinstance(node, int) or isinstance(node, bool) for node in target_nodes)
-  ):
-    raise RuntimeError("'target_nodes' must be a non-empty list of integers.")
-  if (
-      not isinstance(alert_timeout, (int, float))
-      or isinstance(alert_timeout, bool)
-      or alert_timeout <= 0
-  ):
-    raise RuntimeError("'alert_timeout_seconds' must be a positive number.")
-  if not isinstance(tcp_host, str) or not tcp_host:
-    raise RuntimeError("'tcp.host' must be a non-empty string.")
-  if (
-      not isinstance(tcp_port, int)
-      or isinstance(tcp_port, bool)
-      or not 1 <= tcp_port <= 65535
-  ):
-    raise RuntimeError("'tcp.port' must be an integer from 1 to 65535.")
-  if not isinstance(tcp_payload, str):
-    raise RuntimeError("'tcp.payload' must be a string.")
-  if (
-      not isinstance(max_tcp_sends, int)
-      or isinstance(max_tcp_sends, bool)
-      or max_tcp_sends <= 0
-  ):
-    raise RuntimeError("'tcp.max_tcp_sends' must be a positive integer.")
-
+  tcp = config["tcp"]
   return {
-      "websocket_url": websocket_url,
-      "target_nodes": frozenset(target_nodes),
-      "alert_timeout_seconds": alert_timeout,
-      "tcp_host": tcp_host,
-      "tcp_port": tcp_port,
-      "tcp_payload": tcp_payload,
-      "max_tcp_sends": max_tcp_sends,
+      "websocket_url": config["websocket_url"],
+      "target_nodes": frozenset(config["target_nodes"]),
+      "alert_timeout_seconds": config["alert_timeout_seconds"],
+      "tcp_host": tcp["host"],
+      "tcp_port": tcp["port"],
+      "tcp_payload": tcp["payload"],
+      "tcp_node_payloads": tcp.get("node_payloads", {}),
+      "max_tcp_sends": tcp["max_tcp_sends"],
   }
 
 
@@ -108,12 +64,13 @@ def get_sensor_frame(data: dict) -> tuple[object, object]:
   return node_id, state
 
 
-def send_tcp_payload() -> None:
+def send_tcp_payload(node_id: int) -> None:
   try:
     with socket.create_connection(
         (CONFIG["tcp_host"], CONFIG["tcp_port"]), timeout=15
     ) as connection:
-      connection.sendall(CONFIG["tcp_payload"].encode("ascii"))
+      payload = CONFIG["tcp_node_payloads"].get(str(node_id), CONFIG["tcp_payload"])
+      connection.sendall(payload.encode("ascii") + b"\n")
   except OSError as e:
     raise RuntimeError(f"TCP request failed: {e}") from e
 
@@ -128,7 +85,7 @@ async def trigger_alert(node_id: int) -> None:
     max_tcp_sends = CONFIG["max_tcp_sends"]
     for attempt in range(1, max_tcp_sends + 1):
       try:
-        await asyncio.to_thread(send_tcp_payload)
+        await asyncio.to_thread(send_tcp_payload, node_id)
         logger.info(
             f"TCP payload sent for Node {node_id} "
             f"(attempt {attempt}/{max_tcp_sends})."
