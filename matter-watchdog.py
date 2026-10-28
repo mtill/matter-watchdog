@@ -24,17 +24,72 @@ def load_config() -> dict:
   except (OSError, json.JSONDecodeError) as e:
     raise RuntimeError(f"Unable to load configuration from {CONFIG_PATH}: {e}") from e
 
-  tcp = config["tcp"]
+  websocket_url = config.get("websocket_url")
+  if websocket_url is None:
+    raise RuntimeError("Configuration is missing websocket_url.")
+
+  nodes = config.get("nodes")
+  if not isinstance(nodes, dict):
+    raise RuntimeError("Configuration is missing a valid 'nodes' object.")
+
+  default_payload = config.get("default_payload")
+  default_max_tcp_sends = config.get("default_max_tcp_sends")
+  default_alert_timeout = config.get("default_alert_timeout_seconds", 45)
+  tcp_host = config.get("buzzer_host")
+  tcp_port = config.get("buzzer_port")
+
+  if default_payload is None or default_max_tcp_sends is None:
+    raise RuntimeError("Configuration is missing the default TCP payload or send count.")
+  if tcp_host is None or tcp_port is None:
+    raise RuntimeError("Configuration is missing the buzzer/TCP host or port.")
+
+  target_nodes = set()
+  tcp_node_payloads: dict[str, str] = {}
+  node_max_tcp_sends: dict[int, int] = {}
+  node_alert_timeouts: dict[int, int] = {}
+
+  for raw_node_id, node_config in nodes.items():
+    node_id = int(raw_node_id)
+    target_nodes.add(node_id)
+
+    node_dict = node_config if isinstance(node_config, dict) else {}
+    payload = node_dict.get("payload", default_payload)
+    max_sends = node_dict.get("max_tcp_sends", default_max_tcp_sends)
+    alert_timeout = node_dict.get("alert_timeout_seconds", default_alert_timeout)
+
+    if payload is None:
+      raise RuntimeError(f"Node {node_id} is missing payload configuration.")
+
+    tcp_node_payloads[str(node_id)] = payload
+    node_max_tcp_sends[node_id] = int(max_sends)
+    node_alert_timeouts[node_id] = int(alert_timeout)
+
   return {
-      "websocket_url": config["websocket_url"],
-      "target_nodes": frozenset(config["target_nodes"]),
-      "alert_timeout_seconds": config["alert_timeout_seconds"],
-      "tcp_host": tcp["host"],
-      "tcp_port": tcp["port"],
-      "tcp_payload": tcp["payload"],
-      "tcp_node_payloads": tcp.get("node_payloads", {}),
-      "max_tcp_sends": tcp["max_tcp_sends"],
+      "websocket_url": websocket_url,
+      "target_nodes": frozenset(target_nodes),
+      "default_alert_timeout_seconds": int(default_alert_timeout),
+      "alert_timeout_seconds_by_node": {
+          int(node_id): timeout for node_id, timeout in node_alert_timeouts.items()
+      },
+      "tcp_host": tcp_host,
+      "tcp_port": tcp_port,
+      "tcp_payload": default_payload,
+      "tcp_node_payloads": tcp_node_payloads,
+      "max_tcp_sends": int(default_max_tcp_sends),
+      "max_tcp_sends_by_node": {
+          int(node_id): max_sends for node_id, max_sends in node_max_tcp_sends.items()
+      },
   }
+
+
+def get_alert_timeout_seconds(node_id: int) -> int:
+  return CONFIG["alert_timeout_seconds_by_node"].get(
+      node_id, CONFIG["default_alert_timeout_seconds"]
+  )
+
+
+def get_max_tcp_sends(node_id: int) -> int:
+  return CONFIG["max_tcp_sends_by_node"].get(node_id, CONFIG["max_tcp_sends"])
 
 
 CONFIG = load_config()
@@ -77,12 +132,13 @@ def send_tcp_payload(node_id: int) -> None:
 
 async def trigger_alert(node_id: int) -> None:
   try:
-    await asyncio.sleep(CONFIG["alert_timeout_seconds"])
+    alert_timeout_seconds = get_alert_timeout_seconds(node_id)
+    max_tcp_sends = get_max_tcp_sends(node_id)
+    await asyncio.sleep(alert_timeout_seconds)
     logger.warning(
         f"🚨 ALERT: sensor (Node {node_id}) has been OPEN for"
-        f" {CONFIG['alert_timeout_seconds']:g} seconds!"
+        f" {alert_timeout_seconds:g} seconds!"
     )
-    max_tcp_sends = CONFIG["max_tcp_sends"]
     for attempt in range(1, max_tcp_sends + 1):
       try:
         await asyncio.to_thread(send_tcp_payload, node_id)

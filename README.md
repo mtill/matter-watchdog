@@ -14,26 +14,27 @@ Edit `config.json` alongside `matter-watchdog.py`:
 ```json
 {
   "websocket_url": "ws://127.0.0.1:5580/ws",
-  "target_nodes": [4, 9],
-  "alert_timeout_seconds": 45,
-  "tcp": {
-    "host": "10.139.139.74",
-    "port": 65432,
-    "payload": "3,1000,1000",
-    "node_payloads": {
-      "4": "3,200,500",
-      "9": "1,1000,0"
+  "default_payload": "3,1000,1000",
+  "default_max_tcp_sends": 360,
+  "buzzer_host": "10.139.139.74",
+  "buzzer_port": 65432,
+  "nodes": {
+    "4": {
+      "alert_timeout_seconds": 45,
+      "payload": "3,200,500",
+      "max_tcp_sends": 10
     },
-    "max_tcp_sends": 10
+    "9": {
+      "payload": "1,1000,0"
+    }
   }
 }
 ```
 
-`tcp.payload` is the default payload. The optional `tcp.node_payloads` object
-overrides it for listed node IDs; keys are node IDs written as strings and must
-also appear in `target_nodes`. Nodes without an override use the default.
-Each payload is sent as ASCII followed by a newline, which terminates the
-receiver's line-based command.
+`default_payload` is the fallback payload for every node. Each node entry may
+optionally override `payload`, `alert_timeout_seconds`, and `max_tcp_sends`.
+Nodes that omit a key inherit the default values. Each payload is sent as ASCII
+followed by a newline, which terminates the receiver's line-based command.
 
 The listener handles boolean state updates for the configured node IDs. It
 assumes `false` means open and `true` means closed. Verify this mapping against
