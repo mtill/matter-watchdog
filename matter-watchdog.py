@@ -61,8 +61,8 @@ def load_config() -> dict:
       or not 1 <= tcp_port <= 65535
   ):
     raise RuntimeError("'tcp.port' must be an integer from 1 to 65535.")
-  if not isinstance(tcp_payload, int) or isinstance(tcp_payload, bool):
-    raise RuntimeError("'tcp.payload' must be an integer.")
+  if not isinstance(tcp_payload, str):
+    raise RuntimeError("'tcp.payload' must be a string.")
   if (
       not isinstance(max_tcp_sends, int)
       or isinstance(max_tcp_sends, bool)
@@ -113,7 +113,7 @@ def send_tcp_payload() -> None:
     with socket.create_connection(
         (CONFIG["tcp_host"], CONFIG["tcp_port"]), timeout=15
     ) as connection:
-      connection.sendall(str(CONFIG["tcp_payload"]).encode("ascii"))
+      connection.sendall(CONFIG["tcp_payload"].encode("ascii"))
   except OSError as e:
     raise RuntimeError(f"TCP request failed: {e}") from e
 
