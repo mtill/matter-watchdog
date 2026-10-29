@@ -1,0 +1,38 @@
+services:
+  otbr:
+    image: openthread/border-router:latest
+    container_name: otbr
+    restart: always
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - /root/data:/data
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    environment:
+      - OT_RCP_DEVICE=spinel+hdlc+uart:///dev/ttyUSB0?uart-baudrate=460800
+      - OT_INFRA_IF=enp1s0
+      - OT_THREAD_IF=wpan0
+      - OT_LOG_LEVEL=2
+
+  matterjs-server:
+    image: ghcr.io/matter-js/matterjs-server:stable
+    container_name: matterjs-server
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./data:/data
+      - /var/run/dbus:/var/run/dbus
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    environment:
+      - NOBLE_BINDINGS=dbus
+      - BLUETOOTH_ADAPTER=0
+      - ENABLE_TEST_NET_DCL=true
+
