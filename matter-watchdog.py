@@ -43,22 +43,27 @@ def load_config() -> dict:
   if tcp_host is None or tcp_port is None:
     raise RuntimeError("Configuration is missing the buzzer/TCP host or port.")
 
-  target_nodes = set()
+  target_nodes: dict[int, str] = {}
   tcp_node_payloads: dict[str, str] = {}
   node_max_tcp_sends: dict[int, int] = {}
   node_alert_timeouts: dict[int, int] = {}
 
   for raw_node_id, node_config in nodes.items():
     node_id = int(raw_node_id)
-    target_nodes.add(node_id)
-
     node_dict = node_config if isinstance(node_config, dict) else {}
+    node_name = node_dict.get("name", "unnamed")
+    if not isinstance(node_name, str):
+      raise RuntimeError(f"Node {node_id} has an invalid name.")
+    target_nodes[node_id] = node_name
+
     payload = node_dict.get("payload", default_payload)
     max_sends = node_dict.get("max_tcp_sends", default_max_tcp_sends)
     alert_timeout = node_dict.get("alert_timeout_seconds", default_alert_timeout)
 
     if payload is None:
-      raise RuntimeError(f"Node {node_id} is missing payload configuration.")
+      raise RuntimeError(
+          f"Node {node_id} ({node_name}) is missing payload configuration."
+      )
 
     tcp_node_payloads[str(node_id)] = payload
     node_max_tcp_sends[node_id] = int(max_sends)
@@ -66,7 +71,7 @@ def load_config() -> dict:
 
   return {
       "websocket_url": websocket_url,
-      "target_nodes": frozenset(target_nodes),
+      "target_nodes": target_nodes,
       "default_alert_timeout_seconds": int(default_alert_timeout),
       "alert_timeout_seconds_by_node": {
           int(node_id): timeout for node_id, timeout in node_alert_timeouts.items()
@@ -98,6 +103,11 @@ START_LISTENING_MESSAGE = json.dumps(
     {"message_id": "1", "command": "start_listening"}
 )
 TCP_REPEAT_INTERVAL_SECONDS = 60
+
+
+def format_node(node_id: int) -> str:
+  node_name = CONFIG["target_nodes"].get(node_id, "unknown")
+  return f"Node {node_id} ({node_name})"
 
 
 def get_sensor_frame(data: dict) -> tuple[object, object]:
@@ -136,28 +146,28 @@ async def trigger_alert(node_id: int) -> None:
     max_tcp_sends = get_max_tcp_sends(node_id)
     await asyncio.sleep(alert_timeout_seconds)
     logger.warning(
-        f"🚨 ALERT: sensor (Node {node_id}) has been OPEN for"
+        f"🚨 ALERT: sensor ({format_node(node_id)}) has been OPEN for"
         f" {alert_timeout_seconds:g} seconds!"
     )
     for attempt in range(1, max_tcp_sends + 1):
       try:
         await asyncio.to_thread(send_tcp_payload, node_id)
         logger.info(
-            f"TCP payload sent for Node {node_id} "
+            f"TCP payload sent for {format_node(node_id)} "
             f"(attempt {attempt}/{max_tcp_sends})."
         )
       except RuntimeError as e:
         logger.error(
-            f"Failed to send TCP payload for Node {node_id} "
+            f"Failed to send TCP payload for {format_node(node_id)} "
             f"(attempt {attempt}/{max_tcp_sends}): {e}"
         )
 
       if attempt < max_tcp_sends:
         await asyncio.sleep(TCP_REPEAT_INTERVAL_SECONDS)
   except (OSError, RuntimeError) as e:
-    logger.error(f"Failed to send alert for Node {node_id}: {e}")
+    logger.error(f"Failed to send alert for {format_node(node_id)}: {e}")
   except asyncio.CancelledError:
-    logger.info(f"✅ Timer cancelled for Node {node_id} (Sensor closed).")
+    logger.info(f"✅ Timer cancelled for {format_node(node_id)} (Sensor closed).")
 
 
 async def main() -> None:
@@ -182,17 +192,19 @@ async def main() -> None:
               continue
             node_id, state = get_sensor_frame(data)
             if node_id not in CONFIG["target_nodes"] or not isinstance(state, bool):
-              logger.debug(f"Ignoring message for Node {node_id} with state {state}.")
+              logger.debug(
+                  f"Ignoring message for {format_node(node_id)} with state {state}."
+              )
               continue
 
             if state:
               timer = active_timers.pop(node_id, None)
               if timer is not None:
                 timer.cancel()
-                logger.info(f"Sensor on Node {node_id} closed.")
+                logger.info(f"Sensor on {format_node(node_id)} closed.")
             else:
               if node_id not in active_timers:
-                logger.info(f"Sensor on Node {node_id} opened.")
+                logger.info(f"Sensor on {format_node(node_id)} opened.")
                 active_timers[node_id] = asyncio.create_task(
                     trigger_alert(node_id)
                 )
