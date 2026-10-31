@@ -7,6 +7,7 @@ import json
 import logging
 from pathlib import Path
 import socket
+import time
 import websockets
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
@@ -99,10 +100,37 @@ def get_max_tcp_sends(node_id: int) -> int:
 
 CONFIG = load_config()
 active_timers: dict[int, asyncio.Task[None]] = {}
+sensor_states: dict[int, bool] = {}
+sensor_opened_at: dict[int, float] = {}
 START_LISTENING_MESSAGE = json.dumps(
     {"message_id": "1", "command": "start_listening"}
 )
 TCP_REPEAT_INTERVAL_SECONDS = 60
+ALARM_CANCEL_WINDOW_SECONDS = 2
+
+
+def is_alarm_cancel_gesture(node_id: int, state: bool) -> bool:
+  now = time.monotonic()
+  previous_state = sensor_states.get(node_id)
+  sensor_states[node_id] = state
+
+  if not state:
+    if previous_state is not False:
+      sensor_opened_at[node_id] = now
+    return False
+
+  opened_at = sensor_opened_at.pop(node_id, None)
+  return (
+      opened_at is not None
+      and now - opened_at <= ALARM_CANCEL_WINDOW_SECONDS
+  )
+
+
+def cancel_all_active_alarms() -> None:
+  pending_timers = tuple(active_timers.values())
+  active_timers.clear()
+  for timer in pending_timers:
+    timer.cancel()
 
 
 def format_node(node_id: int) -> str:
@@ -167,7 +195,7 @@ async def trigger_alert(node_id: int) -> None:
   except (OSError, RuntimeError) as e:
     logger.error(f"Failed to send alert for {format_node(node_id)}: {e}")
   except asyncio.CancelledError:
-    logger.info(f"✅ Timer cancelled for {format_node(node_id)} (Sensor closed).")
+    logger.info(f"✅ Timer cancelled for {format_node(node_id)}.")
 
 
 async def main() -> None:
@@ -197,17 +225,27 @@ async def main() -> None:
               )
               continue
 
+            previous_state = sensor_states.get(node_id)
+            cancel_gesture = is_alarm_cancel_gesture(node_id, state)
             if state:
               timer = active_timers.pop(node_id, None)
               if timer is not None:
                 timer.cancel()
                 logger.info(f"Sensor on {format_node(node_id)} closed.")
             else:
-              if node_id not in active_timers:
+              if previous_state is not False and node_id not in active_timers:
                 logger.info(f"Sensor on {format_node(node_id)} opened.")
                 active_timers[node_id] = asyncio.create_task(
                     trigger_alert(node_id)
                 )
+
+            if cancel_gesture:
+              logger.info(
+                  f"Open/close within {ALARM_CANCEL_WINDOW_SECONDS} seconds "
+                  f"detected on {format_node(node_id)}; "
+                  "cancelling all active alarms."
+              )
+              cancel_all_active_alarms()
 
       except (
           websockets.ConnectionClosed,

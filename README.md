@@ -7,6 +7,9 @@ configured TCP payload to the configured host and port. The TCP payload is sent
 immediately and then every minute, up to the configured maximum number of
 sends. A closed-state update cancels any remaining sends.
 
+Opening and closing the same sensor within two seconds cancels all currently
+active alarms.
+
 ## Configuration
 
 Edit `config.json` alongside `matter-watchdog.py`:
