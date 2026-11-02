@@ -25,7 +25,8 @@ Edit `config.json` alongside `matter-watchdog.py`:
     "4": {
       "alert_timeout_seconds": 45,
       "payload": "3,200,500",
-      "max_tcp_sends": 10
+      "max_tcp_sends": 10,
+      "no_alarm_between": ["21:00", "05:30"]
     },
     "9": {
       "payload": "1,1000,0"
@@ -38,6 +39,10 @@ Edit `config.json` alongside `matter-watchdog.py`:
 optionally override `payload`, `alert_timeout_seconds`, and `max_tcp_sends`.
 Nodes that omit a key inherit the default values. Each payload is sent as ASCII
 followed by a newline, which terminates the receiver's line-based command.
+Each node may also set `no_alarm_between` to a pair of local times in `HH:MM`
+format. This quiet period may cross midnight; alarms for that node wait until
+the period ends, and are canceled normally if the sensor closes while waiting.
+Nodes without `no_alarm_between` have no quiet period.
 
 The listener handles boolean state updates for the configured node IDs. It
 assumes `false` means open and `true` means closed. Verify this mapping against

@@ -3,6 +3,7 @@
 
 
 import asyncio
+from datetime import datetime, time, timedelta
 import json
 import logging
 from pathlib import Path
@@ -48,6 +49,7 @@ def load_config() -> dict:
   tcp_node_payloads: dict[str, str] = {}
   node_max_tcp_sends: dict[int, int] = {}
   node_alert_timeouts: dict[int, int] = {}
+  no_alarm_between_by_node: dict[int, tuple[time, time]] = {}
 
   for raw_node_id, node_config in nodes.items():
     node_id = int(raw_node_id)
@@ -60,11 +62,40 @@ def load_config() -> dict:
     payload = node_dict.get("payload", default_payload)
     max_sends = node_dict.get("max_tcp_sends", default_max_tcp_sends)
     alert_timeout = node_dict.get("alert_timeout_seconds", default_alert_timeout)
+    no_alarm_between = node_dict.get("no_alarm_between")
 
     if payload is None:
       raise RuntimeError(
           f"Node {node_id} ({node_name}) is missing payload configuration."
       )
+
+    if no_alarm_between is not None:
+      try:
+        if (
+            not isinstance(no_alarm_between, list)
+            or len(no_alarm_between) != 2
+            or not all(isinstance(value, str) for value in no_alarm_between)
+        ):
+          raise ValueError("expected a list containing two HH:MM strings")
+        quiet_start, quiet_end = (
+            datetime.strptime(value, "%H:%M").time()
+            for value in no_alarm_between
+        )
+        if any(
+            parsed.strftime("%H:%M") != value
+            for parsed, value in zip(
+                (quiet_start, quiet_end), no_alarm_between
+            )
+        ):
+          raise ValueError("times must use the HH:MM format")
+        if quiet_start == quiet_end:
+          raise ValueError("start and end times must be different")
+      except ValueError as e:
+        raise RuntimeError(
+            f"Node {node_id} ({node_name}) has invalid no_alarm_between; "
+            'expected ["HH:MM", "HH:MM"] with different times.'
+        ) from e
+      no_alarm_between_by_node[node_id] = (quiet_start, quiet_end)
 
     tcp_node_payloads[str(node_id)] = payload
     node_max_tcp_sends[node_id] = int(max_sends)
@@ -85,6 +116,7 @@ def load_config() -> dict:
       "max_tcp_sends_by_node": {
           int(node_id): max_sends for node_id, max_sends in node_max_tcp_sends.items()
       },
+      "no_alarm_between_by_node": no_alarm_between_by_node,
   }
 
 
@@ -96,6 +128,40 @@ def get_alert_timeout_seconds(node_id: int) -> int:
 
 def get_max_tcp_sends(node_id: int) -> int:
   return CONFIG["max_tcp_sends_by_node"].get(node_id, CONFIG["max_tcp_sends"])
+
+
+def seconds_until_alarm_allowed(node_id: int, now: datetime | None = None) -> float:
+  quiet_period = CONFIG["no_alarm_between_by_node"].get(node_id)
+  if quiet_period is None:
+    return 0
+
+  current_time = now or datetime.now()
+  quiet_start, quiet_end = quiet_period
+  current_clock = current_time.time()
+  crosses_midnight = quiet_start > quiet_end
+  is_quiet = (
+      quiet_start <= current_clock < quiet_end
+      if not crosses_midnight
+      else current_clock >= quiet_start or current_clock < quiet_end
+  )
+  if not is_quiet:
+    return 0
+
+  quiet_end_datetime = datetime.combine(current_time.date(), quiet_end)
+  if crosses_midnight and current_clock >= quiet_start:
+    quiet_end_datetime += timedelta(days=1)
+  return max(0, (quiet_end_datetime - current_time).total_seconds())
+
+
+async def wait_for_alarm_allowed(node_id: int) -> None:
+  while True:
+    remaining = seconds_until_alarm_allowed(node_id)
+    if remaining <= 0:
+      return
+    logger.info(
+        f"Alarm for {format_node(node_id)} is paused until its quiet hours end."
+    )
+    await asyncio.sleep(remaining)
 
 
 CONFIG = load_config()
@@ -173,11 +239,13 @@ async def trigger_alert(node_id: int) -> None:
     alert_timeout_seconds = get_alert_timeout_seconds(node_id)
     max_tcp_sends = get_max_tcp_sends(node_id)
     await asyncio.sleep(alert_timeout_seconds)
+    await wait_for_alarm_allowed(node_id)
     logger.warning(
         f"🚨 ALERT: sensor ({format_node(node_id)}) has been OPEN for"
         f" {alert_timeout_seconds:g} seconds!"
     )
     for attempt in range(1, max_tcp_sends + 1):
+      await wait_for_alarm_allowed(node_id)
       try:
         await asyncio.to_thread(send_tcp_payload, node_id)
         logger.info(
