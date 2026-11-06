@@ -37,6 +37,8 @@ def load_config() -> dict:
   default_payload = config.get("default_payload")
   default_max_tcp_sends = config.get("default_max_tcp_sends")
   default_alert_timeout = config.get("default_alert_timeout_seconds", 45)
+  default_tcp_repeat_interval = config.get("default_tcp_repeat_interval_seconds", 60)
+  alarm_cancel_window = config.get("alarm_cancel_window_seconds", 2)
   tcp_host = config.get("buzzer_host")
   tcp_port = config.get("buzzer_port")
 
@@ -44,11 +46,30 @@ def load_config() -> dict:
     raise RuntimeError("Configuration is missing the default TCP payload or send count.")
   if tcp_host is None or tcp_port is None:
     raise RuntimeError("Configuration is missing the buzzer/TCP host or port.")
+  if (
+      isinstance(default_tcp_repeat_interval, bool)
+      or not isinstance(default_tcp_repeat_interval, (int, float))
+      or default_tcp_repeat_interval < 0
+  ):
+    raise RuntimeError(
+        "Configuration has an invalid default_tcp_repeat_interval_seconds; "
+        "expected a non-negative number."
+    )
+  if (
+      isinstance(alarm_cancel_window, bool)
+      or not isinstance(alarm_cancel_window, (int, float))
+      or alarm_cancel_window < 0
+  ):
+    raise RuntimeError(
+        "Configuration has an invalid alarm_cancel_window_seconds; "
+        "expected a non-negative number."
+    )
 
   target_nodes: dict[int, str] = {}
   tcp_node_payloads: dict[str, str] = {}
   node_max_tcp_sends: dict[int, int] = {}
   node_alert_timeouts: dict[int, int] = {}
+  node_tcp_repeat_intervals: dict[int, int | float] = {}
   no_alarm_between_by_node: dict[int, tuple[time, time]] = {}
 
   for raw_node_id, node_config in nodes.items():
@@ -62,7 +83,20 @@ def load_config() -> dict:
     payload = node_dict.get("payload", default_payload)
     max_sends = node_dict.get("max_tcp_sends", default_max_tcp_sends)
     alert_timeout = node_dict.get("alert_timeout_seconds", default_alert_timeout)
+    tcp_repeat_interval = node_dict.get(
+        "tcp_repeat_interval_seconds", default_tcp_repeat_interval
+    )
     no_alarm_between = node_dict.get("no_alarm_between")
+
+    if (
+        isinstance(tcp_repeat_interval, bool)
+        or not isinstance(tcp_repeat_interval, (int, float))
+        or tcp_repeat_interval < 0
+    ):
+      raise RuntimeError(
+          f"Node {node_id} ({node_name}) has an invalid "
+          "tcp_repeat_interval_seconds; expected a non-negative number."
+      )
 
     if payload is None:
       raise RuntimeError(
@@ -100,6 +134,7 @@ def load_config() -> dict:
     tcp_node_payloads[str(node_id)] = payload
     node_max_tcp_sends[node_id] = int(max_sends)
     node_alert_timeouts[node_id] = int(alert_timeout)
+    node_tcp_repeat_intervals[node_id] = tcp_repeat_interval
 
   return {
       "websocket_url": websocket_url,
@@ -117,6 +152,9 @@ def load_config() -> dict:
           int(node_id): max_sends for node_id, max_sends in node_max_tcp_sends.items()
       },
       "no_alarm_between_by_node": no_alarm_between_by_node,
+      "default_tcp_repeat_interval_seconds": default_tcp_repeat_interval,
+      "tcp_repeat_interval_seconds_by_node": node_tcp_repeat_intervals,
+      "alarm_cancel_window_seconds": alarm_cancel_window,
   }
 
 
@@ -128,6 +166,12 @@ def get_alert_timeout_seconds(node_id: int) -> int:
 
 def get_max_tcp_sends(node_id: int) -> int:
   return CONFIG["max_tcp_sends_by_node"].get(node_id, CONFIG["max_tcp_sends"])
+
+
+def get_tcp_repeat_interval_seconds(node_id: int) -> int | float:
+  return CONFIG["tcp_repeat_interval_seconds_by_node"].get(
+      node_id, CONFIG["default_tcp_repeat_interval_seconds"]
+  )
 
 
 def seconds_until_alarm_allowed(node_id: int, now: datetime | None = None) -> float:
@@ -171,8 +215,6 @@ sensor_opened_at: dict[int, float] = {}
 START_LISTENING_MESSAGE = json.dumps(
     {"message_id": "1", "command": "start_listening"}
 )
-TCP_REPEAT_INTERVAL_SECONDS = 60
-ALARM_CANCEL_WINDOW_SECONDS = 2
 
 
 def is_alarm_cancel_gesture(node_id: int, state: bool) -> bool:
@@ -188,7 +230,7 @@ def is_alarm_cancel_gesture(node_id: int, state: bool) -> bool:
   opened_at = sensor_opened_at.pop(node_id, None)
   return (
       opened_at is not None
-      and now - opened_at <= ALARM_CANCEL_WINDOW_SECONDS
+      and now - opened_at <= CONFIG["alarm_cancel_window_seconds"]
   )
 
 
@@ -259,7 +301,7 @@ async def trigger_alert(node_id: int) -> None:
         )
 
       if attempt < max_tcp_sends:
-        await asyncio.sleep(TCP_REPEAT_INTERVAL_SECONDS)
+        await asyncio.sleep(get_tcp_repeat_interval_seconds(node_id))
   except (OSError, RuntimeError) as e:
     logger.error(f"Failed to send alert for {format_node(node_id)}: {e}")
   except asyncio.CancelledError:
@@ -309,7 +351,7 @@ async def main() -> None:
 
             if cancel_gesture:
               logger.info(
-                  f"Open/close within {ALARM_CANCEL_WINDOW_SECONDS} seconds "
+                  f"Open/close within {CONFIG['alarm_cancel_window_seconds']} seconds "
                   f"detected on {format_node(node_id)}; "
                   "cancelling all active alarms."
               )

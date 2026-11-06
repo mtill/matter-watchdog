@@ -7,8 +7,8 @@ configured TCP payload to the configured host and port. The TCP payload is sent
 immediately and then every minute, up to the configured maximum number of
 sends. A closed-state update cancels any remaining sends.
 
-Opening and closing the same sensor within two seconds cancels all currently
-active alarms.
+Opening and closing the same sensor within the configured alarm-cancel window
+cancels all currently active alarms.
 
 ## Configuration
 
@@ -19,6 +19,8 @@ Edit `config.json` alongside `matter-watchdog.py`:
   "websocket_url": "ws://127.0.0.1:5580/ws",
   "default_payload": "3,1000,1000",
   "default_max_tcp_sends": 360,
+  "default_tcp_repeat_interval_seconds": 60,
+  "alarm_cancel_window_seconds": 2,
   "buzzer_host": "10.139.139.74",
   "buzzer_port": 65432,
   "nodes": {
@@ -26,6 +28,7 @@ Edit `config.json` alongside `matter-watchdog.py`:
       "alert_timeout_seconds": 45,
       "payload": "3,200,500",
       "max_tcp_sends": 10,
+      "tcp_repeat_interval_seconds": 30,
       "no_alarm_between": ["21:00", "05:30"]
     },
     "9": {
@@ -36,9 +39,15 @@ Edit `config.json` alongside `matter-watchdog.py`:
 ```
 
 `default_payload` is the fallback payload for every node. Each node entry may
-optionally override `payload`, `alert_timeout_seconds`, and `max_tcp_sends`.
-Nodes that omit a key inherit the default values. Each payload is sent as ASCII
-followed by a newline, which terminates the receiver's line-based command.
+optionally override `payload`, `alert_timeout_seconds`, `max_tcp_sends`, and
+`tcp_repeat_interval_seconds`. Nodes that omit a key inherit the default
+values. Each payload is sent as ASCII followed by a newline, which terminates
+the receiver's line-based command.
+`default_tcp_repeat_interval_seconds` controls the default delay between
+repeated TCP sends. A node may override it with `tcp_repeat_interval_seconds`.
+`alarm_cancel_window_seconds` controls the maximum open-to-close interval that
+cancels all active alarms. These settings are optional and default to 60 and
+2 seconds, respectively.
 Each node may also set `no_alarm_between` to a pair of local times in `HH:MM`
 format. This quiet period may cross midnight; alarms for that node wait until
 the period ends, and are canceled normally if the sensor closes while waiting.
