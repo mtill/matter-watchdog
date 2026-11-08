@@ -6,7 +6,7 @@ cd "$PROJECT_DIR"
 
 echo "Stopping existing containers cleanly..."
 # 'down' removes network bindings, frees up /dev/ttyUSB0 and DBus sockets, 
-# and prevents resource conflicts before updating.
+# and prevents container name conflicts before updating.
 docker compose down
 
 echo "Pulling latest container images..."
