@@ -4,14 +4,16 @@ set -e
 PROJECT_DIR="/home/beck/matter-watchdog"
 cd "$PROJECT_DIR"
 
-echo "Checking and pulling latest images..."
-# This downloads new layers but doesn't touch the running containers yet
+echo "Stopping existing containers cleanly..."
+# 'down' removes network bindings, frees up /dev/ttyUSB0 and DBus sockets, 
+# and prevents resource conflicts before updating.
+docker compose down
+
+echo "Pulling latest container images..."
 docker compose pull
 
-echo "Restarting updated services cleanly..."
-# 'down' removes the host network mappings and frees up /dev/ttyUSB0 / DBus sockets.
-# 'up -d' spins up the fresh images cleanly without resource conflicts.
-docker compose down && docker compose up -d
+echo "Starting updated services..."
+docker compose up -d
 
 echo "Pruning old, unused images..."
 docker image prune -f

@@ -1,7 +1,7 @@
 services:
   otbr:
     image: openthread/border-router:latest
-    #container_name: otbr
+    container_name: otbr
     restart: always
     network_mode: host
     cap_add:
@@ -22,7 +22,7 @@ services:
 
   matterjs-server:
     image: ghcr.io/matter-js/matterjs-server:stable
-    #container_name: matterjs-server
+    container_name: matterjs-server
     restart: unless-stopped
     network_mode: host
     volumes:
